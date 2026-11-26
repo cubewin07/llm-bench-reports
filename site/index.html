@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>llm-bench results</title>
+  <meta name="description" content="Personal benchmark of frontier models on real backend and full-stack work: scores, uncertainty, cost and failure modes.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="masthead">
+      <div>
+        <h1>llm-bench results</h1>
+        <p class="lede">Which model to use for which kind of software work. Each task comes from one real full-stack codebase
+          (Spring Boot, React, Redis, WebSockets). Every number has an interval, and every comparison is paired.</p>
+      </div>
+      <button id="theme" class="ghost" type="button" aria-label="Switch colour theme">Theme: auto</button>
+    </header>
+
+    <div id="banner" hidden></div>
+
+    <form id="filters" class="filters" aria-label="Filters">
+      <fieldset>
+        <legend>Track</legend>
+        <div class="seg" id="f-track"></div>
+      </fieldset>
+      <fieldset>
+        <legend>Split</legend>
+        <div class="seg" id="f-split"></div>
+      </fieldset>
+      <p class="filter-note" id="filter-note"></p>
+    </form>
+
+    <main id="app" aria-live="polite">
+      <p class="empty">Loading results…</p>
+    </main>
+
+    <footer class="footer" id="footer"></footer>
+  </div>
+  <div id="tooltip" role="tooltip" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
