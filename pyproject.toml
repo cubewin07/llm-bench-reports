@@ -1,0 +1,16 @@
+[project]
+name = "llm-bench-reports"
+version = "0.1.0"
+description = "Public results and dashboard for a personal LLM benchmark. No tasks, no keys, no transcripts."
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "jsonschema>=4.21"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts"]

@@ -1,0 +1,5 @@
+# SHA-256 of the private benchmark's canary string, and of its UUID part.
+# The canary itself never appears in this repo. scripts/check_data.py hashes every
+# UUID-shaped token in the repo and fails if one matches.
+239fd05e3b75794c6597b94253a8608b863f0fb9c3eb8a0358659f7141723dd0
+d482bc5288b0a781fbbf0d07db4c3109d48c74b1e3267a442946ecefb08f0a18
