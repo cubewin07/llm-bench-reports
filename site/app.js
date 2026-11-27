@@ -220,10 +220,21 @@
     return { el, mount };
   }
   const empty = (text) => h("p", { class: "empty" }, text);
+  // A model's name always travels with its colour, so it can be found again across views.
+  const modelName = (k) => h("span", { class: "model" },
+    h("span", { class: "key-dot", style: { background: colorOf(k) }, "aria-hidden": "true" }), label(k));
+  // A button that reveals extra detail and remembers it across re-renders.
+  function moreButton(id, closed, opened) {
+    const on = state.open.has(id);
+    return h("button", { class: "ghost more", type: "button", "aria-expanded": String(on), "data-focus": id,
+      onclick: () => { on ? state.open.delete(id) : state.open.add(id); state.refocus = id; render(); } }, on ? opened : closed);
+  }
 
   // ------------------------------------------------------------------ state
   let DATA = null, MODELS = {};
-  const state = { track: null, split: null, tables: new Set(), refocus: null };
+  const state = { track: null, split: null, tab: "summary", tables: new Set(), open: new Set(), refocus: null };
+  const TABS = [["summary", "Summary"], ["compare", "Compare"], ["cost", "Cost & reliability"],
+    ["behaviour", "Behaviour"], ["tasks", "Tasks"]];
   const slice = () => DATA.slices[`${state.track}/${state.split}`];
   const label = (key) => {
     const m = MODELS[key];
@@ -351,6 +362,8 @@
       const n = Math.max(0, ...Object.values(S.by_category[cat]).map((e) => e.n_tasks));
       s(svg, "text", { x: 0, y: y + cellH / 2 - 2, class: "ink", "font-weight": 500 }, CAT[cat] || cat);
       s(svg, "text", { x: 0, y: y + cellH / 2 + 14, class: "muted" }, `${n} task${n === 1 ? "" : "s"}`);
+      const means = Object.values(S.by_category[cat]).map((v) => v.mean);
+      const top = Math.max(...means), differs = top - Math.min(...means) > 1e-9;
       models.forEach((m, j) => {
         const e = S.by_category[cat][m];
         const x0 = L + colW * j;
@@ -367,7 +380,8 @@
         s(g, "line", { x1: wx(0), x2: wx(1), y1: y + 35, y2: y + 35, stroke: ink, "stroke-opacity": 0.22, "stroke-width": 1 });
         s(g, "line", { x1: wx(e.lo), x2: wx(e.hi), y1: y + 35, y2: y + 35, stroke: ink, "stroke-opacity": 0.85, "stroke-width": 2, "stroke-linecap": "round" });
         s(g, "circle", { cx: wx(e.mean), cy: y + 35, r: 2.5, fill: ink });
-        s(g, "text", { x: x0 + colW / 2, y: y + 50, "text-anchor": "middle", style: `fill:${ink};opacity:.85`, "font-size": 10.5 }, `n=${e.n_tasks}`);
+        if (e.n_tasks !== n) s(g, "text", { x: x0 + colW / 2, y: y + 50, "text-anchor": "middle", style: `fill:${ink};opacity:.85`, "font-size": 10.5 }, `n=${e.n_tasks}`);
+        if (differs && e.mean >= top - 1e-9) s(g, "rect", { x: x0 + 2.5, y: y + 2.5, width: colW - 5, height: cellH - 5, rx: 3, fill: "none", stroke: c.ink, "stroke-width": 2.5 });
         bindTip(g, () => [`${CAT[cat] || cat} · ${label(m)}`, [
           { value: f2(e.mean), label: "mean score" }, { value: ci(e), label: "95% interval" },
           { value: `${e.n_tasks} tasks, ${e.n_runs} runs`, label: "" }]]);
@@ -430,7 +444,7 @@
       const inside = (b) => b[0] >= M.l && b[2] <= W - 2 && b[1] >= 0 && b[3] <= H - M.b;
       const spot = spots.find((sp) => inside(boxOf(sp)) && !placed.some((b) => overlap(b, boxOf(sp)))) || spots[0];
       placed.push(boxOf(spot));
-      s(svg, "text", { x: spot[0], y: spot[1], "text-anchor": spot[2], class: r.front ? "ink" : "" }, r.label);
+      s(svg, "text", { x: spot[0], y: spot[1], "text-anchor": spot[2], class: r.front ? "ink" : "", style: `paint-order:stroke;stroke:${c.surface};stroke-width:4px` }, r.label);
       bindTip(g, () => [r.label, [
         { value: f2(r.e.mean), label: "score", color: col }, { value: ci(r.e), label: "95% interval" },
         { value: xFmt(r.x), label: xName.toLowerCase() },
@@ -598,17 +612,96 @@
     const hit = changed === "split" ? keys.find(([, sp]) => sp === state.split) : keys.find(([t]) => t === state.track);
     [state.track, state.split] = hit || keys[0];
   }
-  function syncHash() { history.replaceState(null, "", `#track=${state.track}&split=${state.split}`); }
+  function syncHash() { history.replaceState(null, "", `#track=${state.track}&split=${state.split}&tab=${state.tab}`); }
 
-  function kpis(S) {
-    const tile = (lab, val, sub) => h("div", { class: "kpi" }, h("div", { class: "label" }, lab), h("div", { class: "value" }, val), h("div", { class: "sub" }, sub));
-    return h("div", { class: "kpis" },
-      tile("Tasks", num(S.n_tasks), `${SPLIT[state.split]} split`),
-      tile("Models", num(S.order.length), state.track === "native" ? "each in its own agent" : "same agent and tools"),
-      tile("Runs counted", num(S.n_records), `latest per model and task, of ${num(S.n_records_all_runs)}`),
-      tile("Smallest detectable gap", "±" + f2(S.power.detectable_gap), `between two models, at ${S.n_tasks} tasks`),
-      tile("Spend, all runs", usd(S.total_cost_all_runs), S.cost_known_share != null && S.cost_known_share < 1 ? `${pct(1 - S.cost_known_share)} of runs unpriced` : "every run priced"),
-      tile("Harness errors", num(S.n_harness_errors), S.n_pending_runs ? `${S.n_pending_runs} runs await finding review` : "left out of scores"));
+  function context(S) {
+    const bits = [`${num(S.n_tasks)} tasks`, `${num(S.order.length)} models`, `${num(S.n_records)} runs counted`,
+      `${usd(S.total_cost_all_runs)} spent across all runs`];
+    if (S.n_harness_errors) bits.push(`${num(S.n_harness_errors)} harness error${S.n_harness_errors === 1 ? "" : "s"} excluded`);
+    if (S.n_pending_runs) bits.push(`${num(S.n_pending_runs)} runs await finding review`);
+    return h("p", { class: "context" }, bits.join(" · "));
+  }
+
+  // The one-sentence answer, then what limits it.
+  function verdictCard(S) {
+    const all = S.recommendations.find((r) => r.category === "all");
+    const cats = S.recommendations.filter((r) => r.category !== "all");
+    const count = (v) => cats.filter((r) => r.verdict === v).length;
+    const lead = label(all.leader);
+    const next = all.runner_up ? label(all.runner_up) : null;
+    const kind = { clear: "good", tied: "neutral", too_few: "warning", single_model: "neutral" }[all.verdict];
+    const title = all.verdict === "clear" ? `${lead} is the best overall`
+      : all.verdict === "single_model" ? `${lead} is the only model so far`
+        : all.verdict === "too_few" ? `${lead} scores highest, on too few tasks to say`
+          : `No clear winner: ${lead} and ${next} can't be separated`;
+    const detail = all.diff
+      ? `${lead} scores ${f2(all.leader_est.mean)}, ${sgn(all.diff.mean)} against ${next} ` +
+        `(95% interval ${sgn(all.diff.lo)} to ${sgn(all.diff.hi)}, ${all.diff.n_tasks} shared tasks).`
+      : `${lead} scores ${f2(all.leader_est.mean)}.`;
+    const el = h("section", { class: "card verdict " + kind, "aria-labelledby": "verdict-t" },
+      h("div", { class: "eyebrow" }, statusIcon(kind), "Overall verdict"),
+      h("h2", { id: "verdict-t" }, title),
+      h("p", null, detail),
+      h("p", { class: "dim small" }, `By kind of work: ${count("clear")} clear lead${count("clear") === 1 ? "" : "s"}, ` +
+        `${count("tied")} too close to call, ${count("too_few")} with too few tasks. ` +
+        `Gaps under about ${f2(S.power.detectable_gap)} can't yet be told from noise.`));
+    return { el, mount: () => {} };
+  }
+
+  // A score as a dot on a 0-1 track with its 95% interval.
+  function scoreBar(e, color) {
+    const at = (v) => `${Math.max(0, Math.min(1, v)) * 100}%`;
+    return h("div", { class: "scorebar", title: `95% interval ${ci(e)}` },
+      h("div", { class: "rail", "aria-hidden": "true" },
+        h("span", { class: "span", style: { left: at(e.lo), width: at(e.hi - e.lo), background: color } }),
+        h("span", { class: "dot", style: { left: at(e.mean), background: color } })),
+      h("b", null, f2(e.mean)), h("span", { class: "dim small range" }, ci(e)));
+  }
+
+  function leaderboardCard(S) {
+    const k = DATA.meta.k;
+    const plain = () => h("div", { class: "tbl-wrap" }, h("table", { class: "board stack" },
+      h("thead", null, h("tr", null,
+        h("th", { scope: "col" }, "Model"), h("th", { scope: "col" }, "Score (0 to 1) and 95% interval"),
+        h("th", { scope: "col", class: "num" }, `All ${k} runs pass`), h("th", { scope: "col", class: "num" }, "Cost per run"),
+        h("th", { scope: "col", class: "num" }, "Time per run"), h("th", { scope: "col", class: "num" }, "Tasks"))),
+      h("tbody", null, S.order.map((m) => { const o = S.overall[m]; const tr = h("tr", null,
+        h("td", { class: "nowrap" }, modelName(m)), h("td", null, scoreBar(o, colorOf(m))),
+        h("td", { class: "num" }, pct(o.passk)), h("td", { class: "num" }, usd(o.cost_per_run)),
+        h("td", { class: "num" }, secs(o.latency_s)), h("td", { class: "num" }, o.n_tasks));
+        const heads = ["", "", `All ${k} runs pass`, "Cost per run", "Time per run", "Tasks"];
+        [...tr.children].forEach((td, i) => { if (heads[i]) td.dataset.label = heads[i]; });
+        return tr; }))));
+    return card({ id: "overall", title: "Leaderboard", plain, sub: "Ranked by mean score. Overlapping intervals are a hint, not a test: see Compare for paired differences." });
+  }
+
+  function decisionCard(S) {
+    const V = {
+      clear: () => status("good", "Clear lead"), tied: () => status("neutral", "Too close to call"),
+      too_few: () => status("warning", "Too few tasks"), single_model: () => status("neutral", "One model"),
+    };
+    const full = state.open.has("decide-more");
+    const col = (t, cls, cell) => ({ t, cls, cell });
+    const cols = [
+      col("Kind of work", null, (r) => [CAT[r.category] || r.category, h("div", { class: "dim small" }, `${r.n_tasks} task${r.n_tasks === 1 ? "" : "s"}`)]),
+      col("Best so far", "nowrap", (r) => modelName(r.leader)),
+      col("Score", "num", (r) => f2(r.leader_est.mean)),
+      full && col("95% interval", "num dim", (r) => ci(r.leader_est)),
+      full && col("Next best", "nowrap", (r) => (r.runner_up ? modelName(r.runner_up) : "–")),
+      full && col("Lead", "num", (r) => (r.diff ? sgn(r.diff.mean) : "–")),
+      full && col("Lead interval", "num dim", (r) => (r.diff ? `[${sgn(r.diff.lo)}, ${sgn(r.diff.hi)}]` : "–")),
+      col("How sure", null, (r) => V[r.verdict]()),
+      col("Cheaper option", "small", (r) => (r.cheaper ? cheaperText(r.cheaper) : h("span", { class: "dim" }, "–"))),
+    ].filter(Boolean);
+    const plain = () => h("div", null, h("div", { class: "tbl-wrap" }, h("table", { class: "stack" },
+      h("thead", null, h("tr", null, cols.map((c) => h("th", { scope: "col", class: c.cls && c.cls.startsWith("num") ? "num" : null }, c.t)))),
+      h("tbody", null, S.recommendations.filter((r) => r.category !== "all")
+        .map((r) => h("tr", null, cols.map((c, i) => h("td", { class: c.cls, "data-label": i > 1 ? c.t : null }, c.cell(r)))))))),
+      moreButton("decide-more", "Show intervals and next best", "Hide intervals and next best"));
+    return card({ id: "decide", title: "Which model for which work", plain,
+      sub: "The best model for each kind of work, and whether its lead is real.",
+      note: `Clear lead: the paired 95% interval excludes zero on at least ${DATA.meta.min_tasks} shared tasks. ` +
+        "Cheaper option: the cheapest model these tasks can't tell apart from the leader, which is not the same as equal." });
   }
 
   function cheaperText(c) {
@@ -617,49 +710,12 @@
     return `${label(c.model)}: ${Math.round((1 - c.cost_ratio) * 100)}% cheaper, ${gap}`;
   }
 
-  function decisionCard(S) {
-    const V = {
-      clear: () => status("good", "Clear lead"), tied: () => status("neutral", "Can't separate"),
-      too_few: () => status("warning", "Too few tasks"), single_model: () => status("neutral", "One model"),
-    };
-    const rows = S.recommendations;
-    const plain = () => h("div", { class: "tbl-wrap" }, h("table", null,
-      h("thead", null, h("tr", null, ["Work", "Tasks", "Best so far", "Score", "95% interval", "Next best", "Lead", "Lead interval", "Verdict", "Cheaper, statistically tied"]
-        .map((t, i) => h("th", { scope: "col", class: [1, 3, 4, 6, 7].includes(i) ? "num" : null }, t)))),
-      h("tbody", null, rows.map((r) => h("tr", null,
-        h("td", null, r.category === "all" ? h("strong", null, CAT.all) : CAT[r.category] || r.category),
-        h("td", { class: "num" }, r.n_tasks),
-        h("td", { class: "nowrap" }, label(r.leader)),
-        h("td", { class: "num" }, f2(r.leader_est.mean)),
-        h("td", { class: "num dim" }, ci(r.leader_est)),
-        h("td", { class: "nowrap" }, r.runner_up ? label(r.runner_up) : "–"),
-        h("td", { class: "num" }, r.diff ? sgn(r.diff.mean) : "–"),
-        h("td", { class: "num dim" }, r.diff ? `[${sgn(r.diff.lo)}, ${sgn(r.diff.hi)}]` : "–"),
-        h("td", null, V[r.verdict]()),
-        h("td", { class: "small" }, r.cheaper ? cheaperText(r.cheaper) : h("span", { class: "dim" }, "–")))))));
-    return card({ id: "decide", title: "Which model for which work", plain,
-      sub: "For each kind of work: the best model so far, and whether its lead over the next model is real. " +
-        "Lead is the paired difference on the tasks both models ran.",
-      note: `A lead is clear only when its 95% interval excludes zero and the two models share at least ${DATA.meta.min_tasks} tasks. ` +
-        "\"Cheaper, statistically tied\" is the cheapest model whose interval against the leader still includes zero, shown with its gap. " +
-        "Tied is not the same as equal: it means these tasks cannot tell the two apart." });
-  }
-
-  function overallCard(S) {
-    const rows = S.order.map((k) => ({ label: label(k), e: S.overall[k] }));
-    return card({ id: "overall", title: "Overall score",
-      sub: "Mean score across tasks. The line is a 95% interval from a two-stage bootstrap: resample tasks, then repeated runs within each task.",
-      draw: (el, W) => drawIntervals(el, W, rows),
-      table: () => ({ cols: [{ label: "Model" }, { label: "Score", num: true }, { label: "95% interval", num: true }, { label: "Tasks", num: true }, { label: "Runs", num: true }, { label: "Latest run" }],
-        rows: S.order.map((k) => { const e = S.overall[k]; return [label(k), f2(e.mean), ci(e), e.n_tasks, e.n_runs, e.latest_date]; }) }) });
-  }
-
   function pairsCard(S) {
     const rows = S.pairs.map((p) => ({ label: `${label(p.a)} vs ${label(p.b)}`, d: p, a: p.a, b: p.b }))
       .sort((p, q) => q.d.mean - p.d.mean);
     const c = C();
     return card({ id: "pairs", title: "Paired differences",
-      sub: "First model minus second, on the tasks both ran. Pairing removes task difficulty from the comparison, so these intervals are much narrower than comparing two overall scores.",
+      sub: "First model minus second on shared tasks. A line that crosses zero means they can't be told apart.",
       legendEl: legend([{ color: c.accent, label: "interval excludes zero" }, { color: c.muted, label: "can't tell apart" }]),
       draw: (el, W) => (rows.length ? drawForest(el, W, rows) : el.append(empty("Needs at least two models."))),
       table: () => ({ cols: [{ label: "First" }, { label: "Second" }, { label: "Difference", num: true }, { label: "95% interval", num: true }, { label: "P(first ahead)", num: true }, { label: "Shared tasks", num: true }],
@@ -669,7 +725,7 @@
   function heatCard(S) {
     const cats = catsOf(S);
     return card({ id: "heat", title: "Score by category",
-      sub: "Each cell is the mean score of one model on one kind of work. The line inside each cell is its 95% interval, on a 0 to 1 scale across the cell. With few tasks per category the lines are long: read them before the colours.",
+      sub: "Mean score per model and kind of work. The outlined cell is the highest in its row. The line in each cell is its 95% interval: read it before the colour.",
       legendEl: legend([{ kind: "ramp", color: rampCss(), lo: "0", hi: "1 mean score" }]),
       draw: (el, W) => drawHeatmap(el, W, S),
       table: () => ({ cols: [{ label: "Category" }, ...S.order.map((k) => ({ label: label(k), num: true }))],
@@ -684,11 +740,11 @@
       rows: base.map((r) => [r.label, f2(r.o.mean), usd(r.o.cost_per_run), usd(r.o.cost_per_pass), secs(r.o.latency_s), compact(r.o.tokens), r.o.turns == null ? "–" : r.o.turns.toFixed(1)]) });
     return [
       card({ id: "cost", title: "Score against cost", legendEl: lg(),
-        sub: "Mean cost of one run at list prices. Runs with no known price are left out.",
+        sub: "Mean cost of one run at list prices. Up and to the left is better.",
         draw: (el, W) => drawScatter(el, W, base.map((r) => ({ ...r, x: r.o.cost_per_run })), "Cost per run", (v) => (v === 0 ? "$0" : usd(v))),
         table: tbl }),
       card({ id: "time", title: "Score against time", legendEl: lg(),
-        sub: "Mean wall-clock time of one run, including tool calls and test runs in the sandbox.",
+        sub: "Mean wall-clock time of one run. Up and to the left is better.",
         draw: (el, W) => drawScatter(el, W, base.map((r) => ({ ...r, x: r.o.latency_s == null ? null : r.o.latency_s / 60 })), "Time per run",
           (v) => (v === 0 ? "0" : (Number.isInteger(v) ? v : v.toFixed(1)) + " min")),
         table: tbl }),
@@ -703,7 +759,7 @@
       return { label: label(m), a: o.pass1, b: o.passk, right: sgn(o.passk - o.pass1), extra: [{ value: `${o.n_pass_tasks} tasks`, label: "rubric tasks excluded" }] };
     });
     return card({ id: "reliab", title: "Reliability",
-      sub: `pass@1 is the chance a single run passes. pass^${k} is the chance all ${k} runs pass, which is what you need when you can't check every answer. The number on the right is the drop.`,
+      sub: `pass@1: one run passes. pass^${k}: all ${k} runs pass. The number on the right is the drop.`,
       legendEl: legend([{ color: c.soft, label: "pass@1" }, { color: c.strong, label: `pass^${k}` }]),
       draw: (el, W) => drawDumbbell(el, W, rows, ["pass@1", `pass^${k}`]),
       table: () => ({ cols: [{ label: "Model" }, { label: "pass@1", num: true }, { label: `pass^${k}`, num: true }, { label: "Drop", num: true }, { label: "Tasks", num: true }],
@@ -712,7 +768,7 @@
 
   function calibrationCard(S) {
     return card({ id: "calib", title: "Calibration",
-      sub: "Answer tasks ask for a confidence. Points on the diagonal mean the model is right as often as it says. Below the diagonal: overconfident. Lower Brier is better.",
+      sub: "On the diagonal, stated confidence matches accuracy. Below it, the model is overconfident. Lower Brier is better.",
       draw: (el, W) => drawCalibration(el, W, S),
       table: () => ({ cols: [{ label: "Model" }, { label: "Stated", num: true }, { label: "Answers", num: true }, { label: "Mean stated", num: true }, { label: "Right", num: true }],
         rows: S.order.filter((k) => S.calibration[k]).flatMap((k) => [
@@ -722,7 +778,11 @@
 
   function failureCard(S) {
     const F = S.failures, keys = S.order.filter((k) => F.by_model[k]);
-    const flags = F.flags.filter((f) => f !== "harness_error");
+    const every = F.flags.filter((f) => f !== "harness_error");
+    // Rare means under 5% of runs for every model.
+    const common = every.filter((f) => keys.some((k) => (F.by_model[k].counts[f] || 0) / (F.by_model[k].runs || 1) >= 0.05));
+    const flags = state.open.has("fail-more") ? every : common;
+    const rare = every.length - common.length;
     const meter = (share) => h("div", { class: "meter" },
       h("div", { class: "track" }, h("div", { class: "fill", style: { width: `${Math.max(0, Math.min(1, share)) * 100}%` } })),
       h("span", { class: "pct" }, pct(share)));
@@ -731,11 +791,12 @@
       keys.map((k) => { const m = F.by_model[k]; const v = m.runs ? shareOf(m) / m.runs : null; const td = h("td", null, v == null ? "–" : meter(v));
         bindTip(td, () => [`${name} · ${label(k)}`, [{ value: pct(v), label: "of runs" }, { value: `${shareOf(m)} of ${m.runs}`, label: "runs" }]]); return td; }));
     return card({ id: "fail", title: "How models fail",
-      sub: "Share of each model's runs that carry each flag. Flags come from automatic checks on the diff, the tests and the transcript, plus a manual review for a few. One run can carry several.",
-      plain: () => h("div", { class: "tbl-wrap" }, h("table", null,
-        h("thead", null, h("tr", null, h("th", { scope: "col" }, "Flag"), keys.map((k) => h("th", { scope: "col" }, label(k))))),
+      sub: "Share of each model's runs with each flag, most common first. One run can carry several.",
+      plain: () => h("div", null, h("div", { class: "tbl-wrap" }, h("table", null,
+        h("thead", null, h("tr", null, h("th", { scope: "col" }, "Flag"), keys.map((k) => h("th", { scope: "col" }, modelName(k))))),
         h("tbody", null, row("Did not pass", "Score below 1 on the run", (m) => m.failed),
-          flags.map((f) => row((FLAG[f] || [f])[0], (FLAG[f] || [null, ""])[1], (m) => m.counts[f] || 0))))) });
+          flags.map((f) => row((FLAG[f] || [f])[0], (FLAG[f] || [null, ""])[1], (m) => m.counts[f] || 0))))),
+        rare ? moreButton("fail-more", `Show ${rare} rare flags (under 5% for every model)`, "Hide rare flags") : null) });
   }
 
   function contaminationCard(S) {
@@ -748,7 +809,7 @@
         extra: [{ value: `${g.public.n_tasks} vs ${g.not_public.n_tasks}`, label: "tasks" }, { value: MODELS[k].cutoff || "unknown", label: "training cutoff" }] };
     });
     return card({ id: "contam", title: "Contamination check",
-      sub: "Some tasks come from bugs I fixed in a public repo. If a model scores much higher on tasks whose fix was public before its training cutoff, it may have seen the answer. Planted bugs have no public fix and are left out.",
+      sub: "A much higher score on fixes that were public before training suggests the model has seen the answer.",
       legendEl: rows.length ? legend([{ color: c.soft, label: "fix not public before cutoff" }, { color: c.strong, label: "fix public before cutoff" }]) : null,
       note: "With a handful of history-based tasks per model this is a smoke alarm, not proof. The number on the right is the gap, then the task counts.",
       draw: (el, W) => (rows.length ? drawDumbbell(el, W, rows, ["fix not public before cutoff", "fix public before cutoff"])
@@ -761,7 +822,7 @@
   function trendsCard(S) {
     const keys = S.order.filter((k) => (S.trends[k] || []).length);
     return card({ id: "trend", title: "Over time",
-      sub: "Mean score of each run. A model's score moves between runs even when nothing changed: compare the change with the intervals in the tooltip before reading a trend into it.",
+      sub: "Mean score of each run. Check the intervals in the tooltip before reading a trend into a change.",
       legendEl: legend(keys.map((k) => ({ kind: "line", color: colorOf(k), label: label(k) }))),
       draw: (el, W) => drawTrends(el, W, S),
       table: () => ({ cols: [{ label: "Model" }, { label: "Date" }, { label: "Score", num: true }, { label: "95% interval", num: true }, { label: "Tasks", num: true }, { label: "Harness" }, { label: "Prompts" }],
@@ -801,7 +862,7 @@
         h("td", null, (H[t.status] || H.ok)())));
     }
     return card({ id: "tasks", title: "Tasks",
-      sub: "Every task, with each model's passes out of its runs (mean score for rubric tasks). Task ids are keyed hashes: stable between runs, but they reveal nothing about the task.",
+      sub: "Passes out of runs for each model (mean score for rubric tasks).",
       note: "Health: saturated tasks no longer separate models; dead tasks are usually a broken key, not a hard task; flat tasks rank models differently from everything else. Discrimination needs at least five models (n/a below that).",
       plain: () => h("div", { class: "tbl-wrap" }, h("table", { class: "taskgrid" },
         h("thead", null, h("tr", null, h("th", { scope: "col" }, "Task"), h("th", { scope: "col" }, "Kind"), h("th", { scope: "col", class: "num" }, "Diff."),
@@ -813,7 +874,7 @@
   function footer() {
     const m = DATA.meta, S = slice();
     const f = document.getElementById("footer");
-    f.replaceChildren(
+    f.replaceChildren(h("details", null, h("summary", null, "Method, and what is not published"),
       h("h3", null, "How to read this"),
       h("ul", null,
         h("li", null, "Every task scores 0 to 1: tests for code changes, a matched answer key for bug finding and questions, and a judge panel with a rubric for design. A run passes at a score of 1."),
@@ -825,35 +886,44 @@
       h("h3", null, "What is not published, and why"),
       h("ul", null,
         h("li", null, "Task prompts, the codebase snapshot, answer keys, hidden tests and transcripts stay private. Publishing any of them would let future models train on the answers."),
-        h("li", null, "Task ids here are keyed hashes. Every record follows a closed schema with no free-text field, and CI scans the repo for the benchmark's canary string by hash.")),
+        h("li", null, "Task ids here are keyed hashes. Every record follows a closed schema with no free-text field, and CI scans the repo for the benchmark's canary string by hash."))),
       h("p", { class: "small dim", style: { marginTop: "16px" } },
         `Built ${m.generated} from ${m.sources.join(", ")} · ${num(m.n_records)} records, ${m.first_date} to ${m.last_date} · ` +
         `harness ${m.harness_versions.join(", ")} · prompts ${m.prompt_versions.join(", ")} · ${num(m.n_boot)} bootstrap resamples.`));
   }
 
   // ------------------------------------------------------------------ render
+  function tabs() {
+    const nav = document.getElementById("tabs");
+    nav.replaceChildren(...TABS.map(([id, name]) => h("button", {
+      type: "button", "aria-current": state.tab === id ? "page" : null, "data-focus": "tab-" + id,
+      onclick: () => { state.tab = id; state.refocus = "tab-" + id; syncHash(); render(); scrollTo(0, 0); } }, name)));
+  }
+
   function render() {
     hideTip();
     filters();
+    tabs();
     const main = document.getElementById("app");
     const S = slice();
     main.replaceChildren();
     if (!S || !S.order.length) { main.append(empty("No scored runs in this slice yet.")); footer(); return; }
     const cards = [];
     const add = (parent, cs) => { for (const c of [].concat(cs)) { parent.append(c.el); cards.push(c); } };
-    main.append(kpis(S));
-    add(main, decisionCard(S));
-    const g1 = h("div", { class: "grid2" }); main.append(g1);
-    add(g1, [overallCard(S), pairsCard(S)]);
-    add(main, heatCard(S));
-    const g2 = h("div", { class: "grid2" }); main.append(g2);
-    add(g2, costCards(S));
-    const g3 = h("div", { class: "grid2" }); main.append(g3);
-    add(g3, [reliabilityCard(S), contaminationCard(S)]);
-    add(main, calibrationCard(S));
-    add(main, failureCard(S));
-    add(main, trendsCard(S));
-    add(main, tasksCard(S));
+    main.append(context(S));
+    const grid = (cs) => { const g = h("div", { class: "grid2" }); main.append(g); add(g, cs); };
+    if (state.tab === "summary") {
+      add(main, [verdictCard(S), leaderboardCard(S), decisionCard(S)]);
+    } else if (state.tab === "compare") {
+      add(main, [heatCard(S), pairsCard(S), trendsCard(S)]);
+    } else if (state.tab === "cost") {
+      grid(costCards(S));
+      add(main, reliabilityCard(S));
+    } else if (state.tab === "behaviour") {
+      add(main, [failureCard(S), calibrationCard(S), contaminationCard(S)]);
+    } else {
+      add(main, tasksCard(S));
+    }
     for (const c of cards) c.mount();
     footer();
     if (state.refocus) {
@@ -895,6 +965,7 @@
       state.track = p.get("track") || "controlled";
       state.split = p.get("split") || "dev";
       if (!d.slices[`${state.track}/${state.split}`] && keys.length) [state.track, state.split] = keys[0].split("/");
+      if (TABS.some(([id]) => id === p.get("tab"))) state.tab = p.get("tab");
       banner();
       render();
     })

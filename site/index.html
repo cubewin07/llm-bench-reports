@@ -12,8 +12,7 @@
     <header class="masthead">
       <div>
         <h1>llm-bench results</h1>
-        <p class="lede">Which model to use for which kind of software work. Each task comes from one real full-stack codebase
-          (Spring Boot, React, Redis, WebSockets). Every number has an interval, and every comparison is paired.</p>
+        <p class="lede">Which model to use for which kind of software work, tested on one real full-stack codebase.</p>
       </div>
       <button id="theme" class="ghost" type="button" aria-label="Switch colour theme">Theme: auto</button>
     </header>
@@ -31,6 +30,8 @@
       </fieldset>
       <p class="filter-note" id="filter-note"></p>
     </form>
+
+    <nav id="tabs" class="tabs" aria-label="Views"></nav>
 
     <main id="app" aria-live="polite">
       <p class="empty">Loading results…</p>

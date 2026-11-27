@@ -13,10 +13,13 @@ holds only scores, in a closed format that cannot carry task content, and a dash
 
 ## Reading the dashboard
 
+The dashboard has five tabs: **Summary** (verdict, leaderboard, best model per kind of work), **Compare**, **Cost & reliability**,
+**Behaviour** and **Tasks**.
+
 | View | What it answers |
 |---|---|
 | Which model for which work | Per category: the best model so far, whether its lead is real, and whether a cheaper model is statistically tied with it |
-| Overall score | Mean score with a 95% interval |
+| Leaderboard | Mean score with a 95% interval, plus reliability, cost and time per model |
 | Paired differences | Model A minus model B on the tasks both ran. Pairing removes task difficulty, so these intervals are much narrower than comparing two overall scores |
 | Score by category | Model × category, with the interval drawn inside each cell |
 | Score against cost / time | Which models are on the frontier: nothing cheaper (or faster) scores higher |
@@ -27,7 +30,7 @@ holds only scores, in a closed format that cannot carry task content, and a dash
 | Over time | Score per run, to catch silent model updates and harness changes |
 | Tasks | Every task by every model, with item health: saturated, dead or flat tasks get flagged |
 
-Every chart has a table view. Track and split filters sit above everything:
+Charts have a table view. Track and split filters sit above everything:
 
 - **Controlled** gives every model the same agent loop, tools, prompts and limits. Use it to compare models.
 - **Native agents** runs each model in its vendor's own coding CLI. Use it to compare products.
@@ -47,7 +50,7 @@ Every chart has a table view. Track and split filters sit above everything:
   Otherwise the dashboard says the models can't be told apart, or that there are too few tasks.
 - The main views use each model's latest run of each task. The trend view keeps every run.
 - Harness errors are counted and shown, but left out of scores.
-- The KPI row shows the smallest gap the current task count can detect. A few dozen tasks can only separate models
+- The summary verdict shows the smallest gap the current task count can detect. A few dozen tasks can only separate models
   that are far apart, and the dashboard says so rather than ranking noise.
 - `scripts/benchstats.py` is a byte-for-byte copy of the private harness's statistics module, so the numbers here
   match the private reports exactly.
