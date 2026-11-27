@@ -617,6 +617,7 @@
   function context(S) {
     const bits = [`${num(S.n_tasks)} tasks`, `${num(S.order.length)} models`, `${num(S.n_records)} runs counted`,
       `${usd(S.total_cost_all_runs)} spent across all runs`];
+    if (S.cost_known_share != null && S.cost_known_share < 1) bits.push(`${pct(1 - S.cost_known_share)} of runs unpriced`);
     if (S.n_harness_errors) bits.push(`${num(S.n_harness_errors)} harness error${S.n_harness_errors === 1 ? "" : "s"} excluded`);
     if (S.n_pending_runs) bits.push(`${num(S.n_pending_runs)} runs await finding review`);
     return h("p", { class: "context" }, bits.join(" · "));
